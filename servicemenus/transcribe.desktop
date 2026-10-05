@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Service
+MimeType=audio/*;video/*;
+Actions=transcribe
+X-KDE-Priority=TopLevel
+
+[Desktop Action transcribe]
+Name=Transcribe (Whisper)
+Name[fr]=Transcrire (Whisper)
+Icon=document-edit
+Exec=transcribe %F

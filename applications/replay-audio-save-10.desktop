@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Save last 10 minutes of audio
+Name[fr]=Sauver les 10 dernières minutes
+Comment=Save the last 10 minutes of the audio buffer as an MP3
+Comment[fr]=Sauve les 10 dernières minutes du tampon audio en MP3
+Exec=replay-audio save 10
+Icon=audio-x-generic
+NoDisplay=true
+X-KDE-Shortcuts=Shift+F10

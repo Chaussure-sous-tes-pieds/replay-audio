@@ -1,0 +1,60 @@
+#!/bin/bash
+# replay-audio: an always-on audio replay buffer (desktop sound + microphone), like Nvidia's
+# instant replay but audio only. Saves the last N minutes as an MP3 on a hotkey.
+#   replay-audio run          record continuously (started by replay-audio.service)
+#   replay-audio save [min]   save the last [min] minutes (default: the whole buffer)
+# Settings: ~/.config/replay-audio.conf (see README).
+BUFFER_MIN=120                                   # buffer length in minutes
+MIC_GAIN=1.0                                     # microphone volume in the mix
+BITRATE=128k
+OUT_DIR="$(xdg-user-dir MUSIC 2>/dev/null || echo "$HOME/Music")/Replays"
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/replay-audio.conf"
+[ -f "$CONF" ] && . "$CONF"
+BUF="${XDG_CACHE_HOME:-$HOME/.cache}/replay-audio"
+SEG=60                                           # seconds per chunk
+
+fr() { case "${LANG:-}" in fr*) echo "$1" ;; *) echo "$2" ;; esac; }
+notify() { notify-send -a "Replay audio" -i audio-x-generic "$@" 2>/dev/null; }
+
+case "${1:-}" in
+run)
+    mkdir -p "$BUF"
+    # 1-minute chunks, overwritten in a ring; flushed as they go so the current minute is saved too
+    exec ffmpeg -hide_banner -loglevel warning -nostdin \
+        -f pulse -name replay-audio-desktop -i @DEFAULT_MONITOR@ \
+        -f pulse -name replay-audio-mic -i default \
+        -filter_complex "[0:a]aresample=48000:async=1[pc];[1:a]aresample=48000:async=1,volume=$MIC_GAIN[mic];[pc][mic]amix=inputs=2:duration=longest:normalize=0[out]" \
+        -map "[out]" -c:a libmp3lame -b:a "$BITRATE" -ac 2 \
+        -flush_packets 1 -f segment -segment_format_options flush_packets=1 -segment_time "$SEG" \
+        -segment_wrap $(( BUFFER_MIN * 60 / SEG + 5 )) -reset_timestamps 1 \
+        "$BUF/seg%03d.mp3"
+    ;;
+save)
+    min="${2:-$BUFFER_MIN}"
+    mkdir -p "$OUT_DIR"
+    list=$(mktemp --suffix=.txt)
+    # chunks written within the requested window, oldest first
+    find "$BUF" -name 'seg*.mp3' -size +4k -mmin -"$(( min + 1 ))" -printf '%T@ %p\n' 2>/dev/null | sort -n \
+        | while read -r _ f; do printf "file '%s'\n" "$f"; done > "$list"
+    if [ ! -s "$list" ]; then
+        notify "Replay audio" "$(fr "Rien à sauver (le service tourne ?)" "Nothing to save (is the service running?)")"
+        rm -f "$list"; exit 1
+    fi
+    dest="$OUT_DIR/Replay_$(date +%Y-%m-%d_%Hh%M-%S).mp3"
+    tmp="$dest.part.mp3"
+    ffmpeg -hide_banner -loglevel error -nostdin -y -f concat -safe 0 -i "$list" -c copy "$tmp"
+    rm -f "$list"
+    # keep only the end if less than the whole buffer was asked for
+    dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$tmp" | cut -d. -f1)
+    if [ -n "$dur" ] && [ "$dur" -gt $(( min * 60 )) ]; then
+        ffmpeg -hide_banner -loglevel error -nostdin -y -sseof -$(( min * 60 )) -i "$tmp" -c copy "$dest" && rm -f "$tmp"
+    else
+        mv "$tmp" "$dest"
+    fi
+    dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$dest" | cut -d. -f1)
+    notify "$(fr "Replay audio sauvé" "Audio replay saved")" "$(( dur / 60 )) min $(( dur % 60 )) s → $(basename "$dest")"
+    echo "$dest"
+    ;;
+*)
+    sed -n '2,6p' "$0"; exit 1 ;;
+esac

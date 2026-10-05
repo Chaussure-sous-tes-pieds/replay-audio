@@ -1,0 +1,14 @@
+[Unit]
+Description=Audio replay buffer (desktop sound + microphone)
+After=pipewire-pulse.service
+Wants=pipewire-pulse.service
+
+[Service]
+ExecStart=%h/.local/bin/replay-audio run
+Restart=always
+RestartSec=3
+# ffmpeg exits with 255 when stopped
+SuccessExitStatus=255
+
+[Install]
+WantedBy=default.target

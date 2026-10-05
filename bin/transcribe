@@ -1,0 +1,51 @@
+#!/bin/bash
+# transcribe: turn recordings (mp3, m4a, wav, video…) into text with Whisper, locally (whisper.cpp, GPU).
+#   transcribe lecture.mp3 [other.mp3 …]
+# Writes next to each file: lecture.txt (text) and lecture.srt (timestamps, to find a passage).
+# Voice activity detection skips silence and music, so Whisper invents far fewer phrases.
+# Settings: ~/.config/replay-audio.conf (see README).
+WHISPER_DIR="$HOME/Applications/whisper.cpp"
+MODELS="${XDG_DATA_HOME:-$HOME/.local/share}/replay-audio/models"
+WHISPER_LANG=auto                                # or fr, en, de…
+CONF="${XDG_CONFIG_HOME:-$HOME/.config}/replay-audio.conf"
+[ -f "$CONF" ] && . "$CONF"
+
+fr() { case "${LANG:-}" in fr*) echo "$1" ;; *) echo "$2" ;; esac; }
+notify() { notify-send -a "Transcription" -i document-edit "$@" 2>/dev/null; }
+first() { for p in "$@"; do [ -e "$p" ] && { echo "$p"; return; }; done; }
+
+# a GPU build in WHISPER_DIR wins over the distro package (often CPU only)
+CLI="${WHISPER_CLI:-$(first "$WHISPER_DIR/build/bin/whisper-cli" || command -v whisper-cli)}"
+MODEL="${WHISPER_MODEL:-$(first "$MODELS/ggml-large-v3-turbo.bin" "$WHISPER_DIR/models/ggml-large-v3-turbo.bin")}"
+VAD="${WHISPER_VAD:-$(first "$MODELS/ggml-silero-v6.2.0.bin" "$WHISPER_DIR/models/ggml-silero-v6.2.0.bin")}"
+if [ -z "$CLI" ] || [ -z "$MODEL" ]; then
+    msg=$(fr "whisper-cli ou le modèle introuvable : voir le README" "whisper-cli or the model not found: see the README")
+    echo "$msg"; notify "Transcription" "$msg"; exit 1
+fi
+[ $# -eq 0 ] && { sed -n '2,6p' "$0"; exit 1; }
+vad=(); [ -n "$VAD" ] && vad=(--vad -vm "$VAD")
+
+# started from the file manager: say it has begun
+[ -t 1 ] || notify "$(fr "Transcription en cours…" "Transcribing…")" "$(for f in "$@"; do basename "$f"; done)"
+
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+for f in "$@"; do
+    [ -f "$f" ] || { echo "$(fr "Introuvable" "Not found") : $f"; continue; }
+    base="${f%.*}"
+    dur=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$f" | cut -d. -f1)
+    echo "→ $(basename "$f") ($(( ${dur:-0} / 60 )) min)"
+    start=$(date +%s)
+    # 16 kHz mono, level evened out (distant voice, quiet mic)
+    ffmpeg -hide_banner -loglevel error -nostdin -y -i "$f" -vn -af dynaudnorm=f=150:g=15 -ar 16000 -ac 1 "$tmp/a.wav" || continue
+    if ! "$CLI" -m "$MODEL" -f "$tmp/a.wav" -l "$WHISPER_LANG" -t "$(( $(nproc) / 2 ))" "${vad[@]}" \
+            -otxt -osrt -of "$tmp/out" -np 2>"$tmp/log" >/dev/null; then
+        echo "$(fr "Échec" "Failed") :"; tail -5 "$tmp/log"
+        notify "$(fr "Transcription ratée" "Transcription failed")" "$(basename "$f")"
+        continue
+    fi
+    sed -E 's/^[[:space:]]+//' "$tmp/out.txt" > "$base.txt"
+    cp "$tmp/out.srt" "$base.srt"
+    t=$(( $(date +%s) - start ))
+    echo "   $(fr "fini en" "done in") $(( t / 60 )) min $(( t % 60 )) s → $base.txt"
+    notify "$(fr "Transcription finie" "Transcription done")" "$(basename "$base").txt ($(( t / 60 )) min $(( t % 60 )) s)"
+done

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Save audio replay
+Name[fr]=Sauver le replay audio
+Comment=Save the whole audio buffer as an MP3
+Comment[fr]=Sauve tout le tampon audio en MP3
+Exec=replay-audio save
+Icon=audio-x-generic
+NoDisplay=true
+X-KDE-Shortcuts=F10
